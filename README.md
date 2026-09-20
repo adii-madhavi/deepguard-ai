@@ -1,6 +1,6 @@
 # DeepGuard AI
 
-Image and sampled-video analysis with a Next.js + Tailwind dashboard and a FastAPI inference service. Upload media, inspect metadata and model evidence, and export a JSON report.
+Image, sampled-video, and segmented-audio analysis with a Next.js + Tailwind dashboard and a FastAPI inference service. Upload media, inspect metadata and model evidence, and export a JSON report.
 
 ## Run locally (PowerShell)
 
@@ -26,7 +26,7 @@ Open http://localhost:3000. API documentation: http://127.0.0.1:8000/docs.
 
 The model downloads from Hugging Face on first backend startup. The UI shows its loading state; metadata analysis remains available during loading or if inference dependencies are missing. Weights are cached by Hugging Face outside the repository. Set `HF_HOME` to choose another cache location.
 
-For metadata-only operation, install `backend/requirements.txt` and set `$env:DEEPGUARD_ENABLE_MODEL='0'` before starting the API. `.env.example` files document settings; the backend reads process environment variables, while Next.js can read `frontend/.env.local`.
+For metadata-only operation, install `backend/requirements.txt` and set both `$env:DEEPGUARD_ENABLE_MODEL='0'` and `$env:DEEPGUARD_ENABLE_AUDIO_MODEL='0'` before starting the API. `.env.example` files document settings; the backend reads process environment variables, while Next.js can read `frontend/.env.local`.
 
 ## Features
 
@@ -36,7 +36,18 @@ For metadata-only operation, install `backend/requirements.txt` and set `$env:DE
 - Local pretrained inference, inconclusive results, and downloadable JSON reports.
 - MP4/MOV and WebM video uploads up to 100 MiB, 120 seconds, and 8,294,400 pixels per frame.
 - Up to 12 evenly spaced video samples, per-frame model scores, basic OpenCV frontal-face boxes, filtering, and timestamp seeking.
-- Bounded in-flight analysis and restricted CORS. Images stay in memory; videos and extracted frames use a temporary directory removed after success or failure.
+- WAV, MP3, FLAC, and audio-only M4A uploads up to 50 MiB and 1–120 seconds, with waveform, six-second segment scores, playback seeking, and report export.
+- Bounded in-flight analysis and restricted CORS. Images stay in memory; video/audio uploads and decoded data use temporary directories removed after success or failure.
+
+## Audio analysis
+
+The dedicated speech detector is [mo-thecreator/Deepfake-audio-detection](https://huggingface.co/mo-thecreator/Deepfake-audio-detection), credited to mo-thecreator and Abdalla312 and published under Apache-2.0. Revision `e4d9874b493362149cec96ced85f00b00b1a04c0` is pinned, the `fake` label is explicitly selected, and weights load as safetensors without remote code. The model downloads on startup alongside the image detector. `/health` exposes independent image and audio model states.
+
+PyAV decodes the first audio track in a separate process with a 30-second timeout. Inputs are restricted to eight channels and 192 kHz or below, then downmixed to mono and resampled to 16 kHz. Decoded sample count enforces the duration limit independently of file metadata. Discontinuous timestamps are rejected so segment offsets remain aligned with playback.
+
+Non-overlapping six-second segments are scored individually. Segments below one second or below -60 dBFS RMS are unscored, and failed/missing predictions remain absent. The summary is the maximum segment score. Scores >=0.8 trigger review; otherwise the result stays inconclusive. No confidence calibration or accuracy evaluation has been performed. The model's published training and intended-use documentation is limited. Music, noise, unfamiliar languages, and new generators may yield unreliable results. No speech-activity detector is used: non-silent does not necessarily mean speech.
+
+Waveform and near-full-scale measurements describe the resampled mono signal and do not establish whether audio is synthetic. This version does not identify speakers, attribute voice clones, or test audio/video synchronization. Video reports still only inspect frames and report whether an audio track exists; upload a separate audio file to run the speech detector.
 
 ## Video analysis
 
@@ -68,6 +79,6 @@ npm exec playwright test
 
 Browser tests require both local servers and Google Chrome. Verified with Node.js 24.19.0, Python 3.14.7, Next.js 16.3.5, and Transformers 4.57.6. Real CPU inference was smoke-tested; this is not an evaluation of detector accuracy. Model revision is pinned to `3824a1e5fb831d4347cb63dfcb3f2a752d987ef2`.
 
-Audio detection, synchronization assessment, temporal-consistency modeling, calibrated evaluation, and PostgreSQL report history remain future stages. Audio is labeled upcoming. To require actual image and video inference in browser tests, set `$env:REQUIRE_MODEL='1'` before running them. Browser tests run serially to respect the single-analysis service limit.
+Synchronization assessment, temporal-consistency modeling, speech-activity detection, calibrated evaluation, and PostgreSQL report history remain future stages. To require actual image, video, and audio inference in browser tests, set `$env:REQUIRE_MODEL='1'` before running them. Browser tests run serially to respect the single-analysis service limit. Generated tone/shape fixtures verify software behavior, not detector accuracy.
 
 For public hosting, add authentication, infrastructure-level upload size/time limits and rate limiting, and a worker queue appropriate to traffic. The service currently supports local use and rejects concurrent analysis requests. Use Vercel for the frontend and a Python/container host with sufficient model RAM; set `NEXT_PUBLIC_API_URL` and `CORS_ORIGINS` to the actual domains. No deployment is created by this repository.

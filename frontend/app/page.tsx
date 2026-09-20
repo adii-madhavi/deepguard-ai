@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import VideoReport, { type VideoFrame } from "./video-report";
+import AudioReport, {
+  type AudioSegment,
+  type AudioSummary,
+} from "./audio-report";
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -23,7 +27,10 @@ import {
 } from "lucide-react";
 
 type Report = {
-  media_type?: "image" | "video";
+  media_type?: "image" | "video" | "audio";
+  segments?: AudioSegment[];
+  audio_summary?: AudioSummary;
+  waveform?: number[];
   frames?: VideoFrame[];
   summary?: {
     sampled_frames: number;
@@ -48,6 +55,8 @@ type Report = {
     duration_seconds?: number;
     fps?: number | null;
     codec?: string;
+    sample_rate?: number;
+    channels?: number;
   };
   notes: string[];
   observations: { title: string; value: string; detail: string }[];
@@ -58,17 +67,20 @@ const verdicts: Record<string, string> = {
   likely_natural: "Likely natural",
   inconclusive: "Inconclusive",
   review_recommended: "Flagged frames · review recommended",
+  audio_review_recommended: "Flagged audio · review recommended",
 };
 
 export default function Home() {
-  const [mode, setMode] = useState<"image" | "video">("image");
+  const [mode, setMode] = useState<"image" | "video" | "audio">("image");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [modelStatus, setModelStatus] = useState("connecting");
+  const [visionModelStatus, setVisionModelStatus] = useState("connecting");
+  const [audioModelStatus, setAudioModelStatus] = useState("connecting");
+  const modelStatus = mode === "audio" ? audioModelStatus : visionModelStatus;
   const input = useRef<HTMLInputElement>(null);
   const result = useRef<HTMLElement>(null);
 
@@ -91,9 +103,13 @@ export default function Home() {
         });
         if (!response.ok) throw new Error();
         const data = await response.json();
-        setModelStatus(data.model_status);
+        setVisionModelStatus(data.model_status);
+        setAudioModelStatus(data.audio_model_status ?? "unavailable");
       } catch {
-        if (!controller.signal.aborted) setModelStatus("offline");
+        if (!controller.signal.aborted) {
+          setVisionModelStatus("offline");
+          setAudioModelStatus("offline");
+        }
       }
     }
     void health();
@@ -111,29 +127,51 @@ export default function Home() {
     const allowed =
       mode === "image"
         ? ["image/jpeg", "image/png", "image/webp"]
-        : ["video/mp4", "video/quicktime", "video/webm"];
+        : mode === "video"
+          ? ["video/mp4", "video/quicktime", "video/webm"]
+          : [
+              "audio/wav",
+              "audio/x-wav",
+              "audio/wave",
+              "audio/mpeg",
+              "audio/mp3",
+              "audio/flac",
+              "audio/x-flac",
+              "audio/mp4",
+              "audio/x-m4a",
+            ];
     if (
       !allowed.includes(candidate.type) &&
       !(
-        mode === "video" &&
+        mode !== "image" &&
         !candidate.type &&
-        /\.(mp4|mov|webm)$/i.test(candidate.name)
+        (mode === "video"
+          ? /\.(mp4|mov|webm)$/i
+          : /\.(wav|mp3|flac|m4a)$/i
+        ).test(candidate.name)
       )
     ) {
       setFile(null);
       setError(
         mode === "image"
           ? "Please select a JPEG, PNG, or WebP image."
-          : "Please select an MP4, MOV, or WebM video.",
+          : mode === "video"
+            ? "Please select an MP4, MOV, or WebM video."
+            : "Please select a WAV, MP3, FLAC, or M4A audio file.",
       );
       return;
     }
-    if (candidate.size > (mode === "image" ? 10 : 100) * 1024 * 1024) {
+    if (
+      candidate.size >
+      (mode === "image" ? 10 : mode === "video" ? 100 : 50) * 1024 * 1024
+    ) {
       setFile(null);
       setError(
         mode === "image"
           ? "This image exceeds the 10 MB limit."
-          : "This video exceeds the 100 MB limit.",
+          : mode === "video"
+            ? "This video exceeds the 100 MB limit."
+            : "This audio exceeds the 50 MB limit.",
       );
       return;
     }
@@ -147,12 +185,12 @@ export default function Home() {
     setReport(null);
     try {
       const response = await fetch(
-        `${API}/analyze${mode === "video" ? "/video" : ""}`,
+        `${API}/analyze${mode === "image" ? "" : `/${mode}`}`,
         {
           method: "POST",
           headers: { "Content-Type": file.type },
           body: file,
-          signal: AbortSignal.timeout(mode === "video" ? 240000 : 120000),
+          signal: AbortSignal.timeout(mode === "image" ? 120000 : 240000),
         },
       );
       const data = await response.json();
@@ -225,10 +263,10 @@ export default function Home() {
           </div>
           <strong>Your media stays yours.</strong>
           <p>
-            Images stay in memory. Video processing uses temporary files that
-            are deleted after analysis.
+            Images stay in memory. Video and audio use temporary files that are
+            deleted after analysis.
           </p>
-          <span className="version">IMAGE + VIDEO · v0.2</span>
+          <span className="version">IMAGE · VIDEO · AUDIO · v0.3</span>
         </div>
       </aside>
 
@@ -314,9 +352,20 @@ export default function Home() {
               >
                 <Video size={17} /> Video
               </button>
-              <span aria-disabled="true">
-                <AudioLines size={17} /> Audio <small>SOON</small>
-              </span>
+              <button
+                type="button"
+                className={mode === "audio" ? "selected" : ""}
+                aria-pressed={mode === "audio"}
+                disabled={busy}
+                onClick={() => {
+                  setMode("audio");
+                  setFile(null);
+                  setReport(null);
+                  setError("");
+                }}
+              >
+                <AudioLines size={17} /> Audio
+              </button>
             </div>
             <div
               className={`dropzone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""}`}
@@ -335,12 +384,18 @@ export default function Home() {
                 ref={input}
                 type="file"
                 aria-label={
-                  mode === "image" ? "Select an image" : "Select a video"
+                  mode === "image"
+                    ? "Select an image"
+                    : mode === "video"
+                      ? "Select a video"
+                      : "Select an audio file"
                 }
                 accept={
                   mode === "image"
                     ? "image/jpeg,image/png,image/webp"
-                    : "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                    : mode === "video"
+                      ? "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                      : "audio/wav,audio/mpeg,audio/flac,audio/mp4,.wav,.mp3,.flac,.m4a"
                 }
                 disabled={busy}
                 className="sr-only"
@@ -354,6 +409,13 @@ export default function Home() {
                   {preview &&
                     (mode === "image" ? (
                       <img src={preview} alt="Selected image preview" />
+                    ) : mode === "audio" ? (
+                      <audio
+                        src={preview}
+                        controls
+                        preload="metadata"
+                        aria-label="Selected audio preview"
+                      />
                     ) : (
                       <video
                         src={preview}
@@ -413,8 +475,9 @@ export default function Home() {
                       </>
                     ) : (
                       <>
-                        MP4, MOV, WEBM <b>·</b> Up to 100 MB <b>·</b> 2 minutes
-                        / 4K
+                        {mode === "video"
+                          ? "MP4, MOV, WEBM · Up to 100 MB · 2 minutes / 4K"
+                          : "WAV, MP3, FLAC, M4A · Up to 50 MB · 1–120 seconds"}
                       </>
                     )}
                   </span>
@@ -433,7 +496,7 @@ export default function Home() {
                 <ShieldCheck size={15} />{" "}
                 {mode === "image"
                   ? "Your image is processed in memory"
-                  : "Temporary video files are deleted after analysis"}
+                  : "Temporary media files are deleted after analysis"}
               </span>
               <button
                 className="primary-button"
@@ -476,7 +539,9 @@ export default function Home() {
                   <span>
                     {report.media_type === "video"
                       ? "Highest sampled-frame score"
-                      : "AI-generation model score"}
+                      : report.media_type === "audio"
+                        ? "Highest audio-segment score"
+                        : "AI-generation model score"}
                   </span>
                   <strong>{score === null ? "—" : `${score}%`}</strong>
                   <div className="meter">
@@ -487,20 +552,35 @@ export default function Home() {
                       ? "No detector score available for this media."
                       : report.media_type === "video"
                         ? "Peak image-detector output across sampled frames. This does not measure whole-video authenticity."
-                        : "Uncalibrated model output. This is not a confidence percentage or proof of origin."}
+                        : report.media_type === "audio"
+                          ? "Peak synthetic-speech score across analyzed segments. Experimental and uncalibrated; not proof of origin."
+                          : "Uncalibrated model output. This is not a confidence percentage or proof of origin."}
                   </p>
                 </div>
                 <dl className="metadata">
                   <div>
-                    <dt>Dimensions</dt>
+                    <dt>
+                      {report.media_type === "audio"
+                        ? "Sample rate / channels"
+                        : "Dimensions"}
+                    </dt>
                     <dd>
-                      {report.metadata.width} × {report.metadata.height}
+                      {report.media_type === "audio"
+                        ? `${report.metadata.sample_rate} Hz / ${report.metadata.channels}`
+                        : `${report.metadata.width} × ${report.metadata.height}`}
                     </dd>
                   </div>
                   <div>
-                    <dt>Format / color</dt>
+                    <dt>
+                      {report.media_type === "audio"
+                        ? "Format / codec"
+                        : "Format / color"}
+                    </dt>
                     <dd>
-                      {report.metadata.format} / {report.metadata.color_mode}
+                      {report.metadata.format} /{" "}
+                      {report.media_type === "audio"
+                        ? report.metadata.codec
+                        : report.metadata.color_mode}
                     </dd>
                   </div>
                   <div>
@@ -511,12 +591,16 @@ export default function Home() {
                     <dt>
                       {report.media_type === "video"
                         ? "Duration / frame rate"
-                        : "Embedded software"}
+                        : report.media_type === "audio"
+                          ? "Duration"
+                          : "Embedded software"}
                     </dt>
                     <dd>
                       {report.media_type === "video"
                         ? `${report.metadata.duration_seconds}s / ${report.metadata.fps ?? "Unknown"} fps`
-                        : report.metadata.software || "Not recorded"}
+                        : report.media_type === "audio"
+                          ? `${report.metadata.duration_seconds} seconds`
+                          : report.metadata.software || "Not recorded"}
                     </dd>
                   </div>
                 </dl>
@@ -525,6 +609,14 @@ export default function Home() {
                 <VideoReport
                   frames={report.frames}
                   summary={report.summary}
+                  src={preview}
+                />
+              )}
+              {report.segments && report.audio_summary && report.waveform && (
+                <AudioReport
+                  segments={report.segments}
+                  summary={report.audio_summary}
+                  waveform={report.waveform}
                   src={preview}
                 />
               )}
@@ -569,8 +661,8 @@ export default function Home() {
                 </div>
                 <h3>Look for AI signals</h3>
                 <p>
-                  A pretrained vision model examines visual patterns associated
-                  with generated images.
+                  Dedicated image and speech models examine patterns associated
+                  with generated media.
                 </p>
               </article>
               <article>
@@ -579,7 +671,7 @@ export default function Home() {
                 </div>
                 <h3>Inspect the details</h3>
                 <p>
-                  Explore image properties, embedded metadata, and a unique file
+                  Explore media properties, embedded metadata, and a unique file
                   fingerprint.
                 </p>
               </article>

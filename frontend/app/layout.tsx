@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./video.css";
+import "./audio.css";
 
 export const metadata: Metadata = {
   title: "DeepGuard AI · Media intelligence",

@@ -1,4 +1,4 @@
-"""Images stay in memory; video temporary files are removed after each request."""
+"""Images stay in memory; audio/video temporary files are removed after each request."""
 import hashlib
 import io
 import logging
@@ -16,9 +16,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageOps, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
+import audio_analysis
+from audio_routes import upload_audio
 
 MAX_BYTES = 10 * 1024 * 1024
 MAX_VIDEO_BYTES = 100 * 1024 * 1024
+MAX_AUDIO_BYTES = 50 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 20_000_000
 MODEL_ID = os.getenv("DEEPGUARD_MODEL", "haywoodsloan/ai-image-detector-dev-deploy")
 MODEL_REVISION = os.getenv("DEEPGUARD_REVISION", "3824a1e5fb831d4347cb63dfcb3f2a752d987ef2")
@@ -55,10 +58,11 @@ def load_detector():
 @asynccontextmanager
 async def lifespan(app):
     threading.Thread(target=load_detector, daemon=True).start()
+    threading.Thread(target=audio_analysis.load_detector, daemon=True).start()
     yield
 
 
-app = FastAPI(title="DeepGuard AI", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="DeepGuard AI", version="0.3.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(","),
@@ -69,7 +73,13 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model_status": model_state, "model_id": MODEL_ID}
+    return {"status": "ok", "model_status": model_state, "model_id": MODEL_ID,
+            "audio_model_status": audio_analysis.model_state, "audio_model_id": audio_analysis.MODEL_ID}
+
+
+@app.post("/analyze/audio")
+async def analyze_audio_upload(request: Request):
+    return await upload_audio(request, analysis_lock, MAX_AUDIO_BYTES)
 
 
 def predict(image):
@@ -146,7 +156,7 @@ def analyze(data: bytes):
 async def analyze_upload(request: Request):
     # ponytail: one in-flight analysis per process; add a bounded worker queue when traffic requires it.
     if not analysis_lock.acquire(blocking=False):
-        raise HTTPException(429, "Another image is being analyzed. Please try again shortly.")
+        raise HTTPException(429, "Another file is being analyzed. Please try again shortly.")
     try:
         data = bytearray()
         async for chunk in request.stream():
