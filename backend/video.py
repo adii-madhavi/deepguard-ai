@@ -9,6 +9,7 @@ import sys
 
 from fastapi import HTTPException
 from PIL import Image
+from av_timing import inspect_timing
 
 MAX_DURATION = 120
 MAX_PIXELS = 3840 * 2160
@@ -46,6 +47,9 @@ def decode_video(path: Path):
         if not math.isfinite(duration) or not 0 < duration <= MAX_DURATION:
             raise ValueError("Video must have a readable duration of 120 seconds or less.")
         start = float((stream.start_time or 0) * stream.time_base)
+        origin = float(container.start_time / av.time_base) if container.start_time is not None else start
+        origin = max(0.0, origin)
+        timing = inspect_timing(container)
         fps = float(stream.average_rate) if stream.average_rate else None
         metadata = {
             "format": "MP4 / MOV" if container_format == "mov" else "WebM / Matroska",
@@ -53,6 +57,7 @@ def decode_video(path: Path):
             "duration_seconds": round(duration, 3),
             "fps": round(fps, 3) if fps and math.isfinite(fps) else None,
             "codec": stream.codec_context.name, "has_audio": bool(container.streams.audio),
+            "media_origin_seconds": origin, "audio_tracks": len(container.streams.audio),
             "software": str(container.metadata.get("encoder", ""))[:200] or None,
         }
         samples = []
@@ -90,13 +95,13 @@ def decode_video(path: Path):
                 thumbnail = io.BytesIO()
                 image.save(thumbnail, format="JPEG", quality=75)
                 image.close()
-                samples.append({"timestamp": round(max(0, timestamp), 3), "file": filename,
+                samples.append({"timestamp": round(max(0, float(frame.time) - origin), 3), "file": filename,
                                 "faces": faces, "thumbnail": "data:image/jpeg;base64," +
                                 base64.b64encode(thumbnail.getvalue()).decode("ascii")})
                 break
         if not samples:
             raise ValueError("No readable video frames were found.")
-        return {"metadata": metadata, "frames": samples}
+        return {"metadata": metadata, "frames": samples, "av_timing": timing}
 
 
 def analyze_video(path: Path, predictor):

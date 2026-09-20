@@ -30,24 +30,34 @@ export default function AudioReport({
   summary,
   waveform,
   src,
+  embedded = false,
+  playbackOffset = 0,
 }: {
   segments: AudioSegment[];
   summary: AudioSummary;
   waveform: number[];
   src: string;
+  embedded?: boolean;
+  playbackOffset?: number | null;
 }) {
-  const player = useRef<HTMLAudioElement>(null);
+  const player = useRef<HTMLMediaElement | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [flaggedOnly, setFlaggedOnly] = useState(false);
   const [playbackError, setPlaybackError] = useState(false);
   return (
     <section
       className="video-report audio-report"
-      aria-label="Audio segment timeline"
+      aria-label={
+        embedded ? "Embedded audio segment timeline" : "Audio segment timeline"
+      }
     >
       <div className="timeline-heading">
         <div>
-          <h3>Listen closer. Inspect each segment.</h3>
+          <h3>
+            {embedded
+              ? "Speech evidence from this video"
+              : "Listen closer. Inspect each segment."}
+          </h3>
           <p>Six-second segments with experimental synthetic-speech scores.</p>
         </div>
         <span>
@@ -74,14 +84,37 @@ export default function AudioReport({
           />
         ))}
       </svg>
-      <audio
-        ref={player}
-        src={src}
-        controls
-        preload="metadata"
-        aria-label="Analysis audio player"
-        onError={() => setPlaybackError(true)}
-      />
+      {embedded ? (
+        <video
+          ref={(node) => {
+            player.current = node;
+          }}
+          src={src}
+          controls
+          preload="metadata"
+          aria-label="Embedded audio video player"
+          onError={() => setPlaybackError(true)}
+        />
+      ) : (
+        <audio
+          ref={(node) => {
+            player.current = node;
+          }}
+          src={src}
+          controls
+          preload="metadata"
+          aria-label="Analysis audio player"
+          onError={() => setPlaybackError(true)}
+        />
+      )}
+      {embedded && (
+        <p className="timeline-note">
+          Segment times are relative to the decoded audio.{" "}
+          {playbackOffset === null
+            ? "Playback offset is unavailable; automatic seeking is disabled."
+            : "Seeking includes the audio track's offset in the video."}
+        </p>
+      )}
       {playbackError && (
         <p className="playback-note">
           Your browser cannot play this format. Segment scores and the
@@ -115,8 +148,15 @@ export default function AudioReport({
                 aria-label={`Inspect audio segment at ${time(segment.start)}`}
                 onClick={() => {
                   setSelected(index);
-                  if (player.current && player.current.readyState >= 1) {
-                    player.current.currentTime = segment.start;
+                  if (
+                    player.current &&
+                    player.current.readyState >= 1 &&
+                    playbackOffset !== null
+                  ) {
+                    player.current.currentTime = Math.max(
+                      0,
+                      segment.start + playbackOffset,
+                    );
                     player.current.pause();
                   }
                 }}

@@ -56,7 +56,7 @@ def predict(samples):
     return score
 
 
-def decode_audio(path: Path):
+def decode_audio(path: Path, allow_video=False):
     import av
     with path.open("rb") as source:
         header = source.read(12)
@@ -68,16 +68,18 @@ def decode_audio(path: Path):
         fmt = "mp3"
     elif header[4:8] == b"ftyp":
         fmt = "mov"
+    elif allow_video and header[:4] == b"\x1aE\xdf\xa3":
+        fmt = "matroska"
     else:
         raise ValueError("Use a WAV, MP3, FLAC, or M4A audio file.")
     with av.open(str(path), format=fmt, options={"protocol_whitelist": "file", "enable_drefs": "0"}) as container:
-        if container.streams.video or not container.streams.audio:
+        if (container.streams.video and not allow_video) or not container.streams.audio:
             raise ValueError("Upload an audio-only file with a readable audio track.")
         stream = container.streams.audio[0]
         rate, channels = stream.codec_context.sample_rate, stream.codec_context.channels
         if not 0 < rate <= 192000 or not 0 < channels <= 8:
             raise ValueError("Audio must have at most 8 channels and a sample rate of 192 kHz or less.")
-        advertised = container.duration / av.time_base if container.duration else None
+        advertised = float(stream.duration * stream.time_base) if stream.duration is not None else container.duration / av.time_base if container.duration else None
         if advertised and advertised > MAX_DURATION + 0.1:
             raise ValueError("Audio must be 120 seconds or shorter.")
         resampler = av.AudioResampler(format="fltp", layout="mono", rate=SAMPLE_RATE)
@@ -113,12 +115,13 @@ def decode_audio(path: Path):
         np.save(path.parent / "samples.npy", samples, allow_pickle=False)
         return {"format": "M4A" if fmt == "mov" else fmt.upper(), "codec": stream.codec_context.name,
                 "sample_rate": rate, "channels": channels, "analysis_sample_rate": SAMPLE_RATE,
-                "duration_seconds": round(count / SAMPLE_RATE, 3), "audio_tracks": len(container.streams.audio)}
+                "duration_seconds": round(count / SAMPLE_RATE, 3), "audio_tracks": len(container.streams.audio),
+                "first_sample_seconds": float(start_time) if start_time is not None else None}
 
 
-def analyze_audio(path: Path):
+def analyze_audio(path: Path, allow_video=False):
     try:
-        worker = subprocess.run([sys.executable, str(Path(__file__).resolve()), str(path)],
+        worker = subprocess.run([sys.executable, str(Path(__file__).resolve()), str(path)] + (["--video"] if allow_video else []),
                                 capture_output=True, text=True, timeout=30, check=False,
                                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
     except subprocess.TimeoutExpired:
@@ -188,6 +191,6 @@ def analyze_audio(path: Path):
 
 if __name__ == "__main__":
     try:
-        print(json.dumps(decode_audio(Path(sys.argv[1]))))
+        print(json.dumps(decode_audio(Path(sys.argv[1]), allow_video="--video" in sys.argv[2:])))
     except ValueError as error:
         print(json.dumps({"error": str(error)}))

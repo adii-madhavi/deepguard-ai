@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import VideoReport, { type VideoFrame } from "./video-report";
+import AVReport, { type AVTiming, type EmbeddedAudio } from "./av-report";
 import AudioReport, {
   type AudioSegment,
   type AudioSummary,
@@ -27,6 +28,8 @@ import {
 } from "lucide-react";
 
 type Report = {
+  av_timing?: AVTiming;
+  embedded_audio?: EmbeddedAudio | null;
   media_type?: "image" | "video" | "audio";
   segments?: AudioSegment[];
   audio_summary?: AudioSummary;
@@ -68,6 +71,7 @@ const verdicts: Record<string, string> = {
   inconclusive: "Inconclusive",
   review_recommended: "Flagged frames · review recommended",
   audio_review_recommended: "Flagged audio · review recommended",
+  av_review_recommended: "Media signals · review recommended",
 };
 
 export default function Home() {
@@ -266,7 +270,7 @@ export default function Home() {
             Images stay in memory. Video and audio use temporary files that are
             deleted after analysis.
           </p>
-          <span className="version">IMAGE · VIDEO · AUDIO · v0.3</span>
+          <span className="version">IMAGE · VIDEO · AUDIO · v0.4</span>
         </div>
       </aside>
 
@@ -617,6 +621,13 @@ export default function Home() {
                   segments={report.segments}
                   summary={report.audio_summary}
                   waveform={report.waveform}
+                  src={preview}
+                />
+              )}
+              {report.av_timing && (
+                <AVReport
+                  timing={report.av_timing}
+                  audio={report.embedded_audio}
                   src={preview}
                 />
               )}

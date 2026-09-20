@@ -47,7 +47,7 @@ PyAV decodes the first audio track in a separate process with a 30-second timeou
 
 Non-overlapping six-second segments are scored individually. Segments below one second or below -60 dBFS RMS are unscored, and failed/missing predictions remain absent. The summary is the maximum segment score. Scores >=0.8 trigger review; otherwise the result stays inconclusive. No confidence calibration or accuracy evaluation has been performed. The model's published training and intended-use documentation is limited. Music, noise, unfamiliar languages, and new generators may yield unreliable results. No speech-activity detector is used: non-silent does not necessarily mean speech.
 
-Waveform and near-full-scale measurements describe the resampled mono signal and do not establish whether audio is synthetic. This version does not identify speakers, attribute voice clones, or test audio/video synchronization. Video reports still only inspect frames and report whether an audio track exists; upload a separate audio file to run the speech detector.
+Waveform and near-full-scale measurements describe the resampled mono signal and do not establish whether audio is synthetic. This version does not identify speakers or attribute voice clones. Video reports also analyze the first embedded audio track when it can be decoded. Frame and speech scores stay separate; they are never fused into a confidence percentage.
 
 ## Video analysis
 
@@ -55,7 +55,15 @@ The backend uses PyAV's bundled FFmpeg libraries to decode supported containers 
 
 The summary score is the **maximum scored sample**, not a whole-video probability. Samples at or above 0.8 are flagged for review. The overall result is review recommended if any sample is flagged and inconclusive otherwise, even when all scores are low. Missing model scores remain missing; the report shows partial coverage. Events between samples can be missed. OpenCV face boxes only locate likely frontal faces and do not assess manipulation or identity consistency.
 
-Audio track presence is reported, but audio contents, lip synchronization, and temporal manipulation are not evaluated. Browser codec support may differ from backend support; if playback fails, sampled thumbnails and JSON results remain usable. Normal request completion and errors clean up temporary files; a hard machine/process crash can leave OS temporary files behind.
+Embedded audio is analyzed with the speech detector; an audio failure is recorded without discarding video results. Lip synchronization and temporal manipulation are not evaluated. Browser codec support may differ from backend support; if playback fails, sampled thumbnails and JSON results remain usable. Normal request completion and errors clean up temporary files; a hard machine/process crash can leave OS temporary files behind.
+
+## Audio/video consistency
+
+Video reports compare the first audio and video tracks' starts, ends, and durations. Timing comes from stream metadata, with a bounded packet-timestamp fallback where durations are missing (common with WebM). Missing or invalid evidence produces an unavailable result, not assumed alignment. A start or end difference greater than 250 ms is highlighted for manual review. Positive offsets mean audio starts or ends later than video.
+
+These measurements describe track boundaries, **not lip-sync delay**. Intentional soundtracks, edits, container metadata, and codec padding can explain differences. Equal track boundaries cannot establish that speech matches visible mouth movement. Content-level lip synchronization requires a separate model and evaluation and remains unimplemented.
+
+The combined report shows separate frame and embedded-speech scores and model details. A timing difference or flagged audio segment can recommend review without altering the visual model score. Audio segment times are relative to decoded audio; playback seeking adds its measured offset in the container. Frame timestamps use the container playback origin. If the audio offset cannot be determined, automatic audio seeking is disabled.
 
 ## Model and interpretation
 
@@ -79,6 +87,6 @@ npm exec playwright test
 
 Browser tests require both local servers and Google Chrome. Verified with Node.js 24.19.0, Python 3.14.7, Next.js 16.3.5, and Transformers 4.57.6. Real CPU inference was smoke-tested; this is not an evaluation of detector accuracy. Model revision is pinned to `3824a1e5fb831d4347cb63dfcb3f2a752d987ef2`.
 
-Synchronization assessment, temporal-consistency modeling, speech-activity detection, calibrated evaluation, and PostgreSQL report history remain future stages. To require actual image, video, and audio inference in browser tests, set `$env:REQUIRE_MODEL='1'` before running them. Browser tests run serially to respect the single-analysis service limit. Generated tone/shape fixtures verify software behavior, not detector accuracy.
+Content-level lip synchronization, temporal-consistency modeling, speech-activity detection, calibrated evaluation, and PostgreSQL report history remain future stages. To require actual image, video, and audio inference in browser tests, set `$env:REQUIRE_MODEL='1'` before running them. Browser tests run serially to respect the single-analysis service limit. Generated tone/shape fixtures verify software behavior, not detector accuracy.
 
 For public hosting, add authentication, infrastructure-level upload size/time limits and rate limiting, and a worker queue appropriate to traffic. The service currently supports local use and rejects concurrent analysis requests. Use Vercel for the frontend and a Python/container host with sufficient model RAM; set `NEXT_PUBLIC_API_URL` and `CORS_ORIGINS` to the actual domains. No deployment is created by this repository.

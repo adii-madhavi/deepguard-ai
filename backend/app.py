@@ -62,7 +62,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="DeepGuard AI", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="DeepGuard AI", version="0.4.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(","),
@@ -192,15 +192,30 @@ async def analyze_video_upload(request: Request):
             if not size:
                 raise HTTPException(422, "Choose a video to analyze.")
             analysis = await run_in_threadpool(analyze_video, path, predict)
+            if analysis["metadata"]["has_audio"]:
+                try:
+                    embedded = await run_in_threadpool(audio_analysis.analyze_audio, path, True)
+                    first_sample = embedded["metadata"]["first_sample_seconds"]
+                    embedded["playback_offset_seconds"] = first_sample - analysis["metadata"]["media_origin_seconds"] if first_sample is not None else None
+                    analysis["embedded_audio"] = embedded
+                except HTTPException as error:
+                    analysis["embedded_audio"] = {"error": error.detail}
+                except Exception:
+                    logger.exception("Embedded audio analysis failed")
+                    analysis["embedded_audio"] = {"error": "Embedded audio analysis could not complete; frame results remain available."}
+            else:
+                analysis["embedded_audio"] = None
             frames = analysis["frames"]
             scores = [frame["ai_score"] for frame in frames if frame["ai_score"] is not None]
             flagged = sum(frame["flagged"] for frame in frames)
+            embedded_flagged = (analysis.get("embedded_audio") or {}).get("audio_summary", {}).get("flagged_segments", 0)
+            timing_difference = analysis["av_timing"]["status"] == "timing_difference"
             status = "completed" if len(scores) == len(frames) else "partial" if scores else "unavailable"
             analysis["metadata"]["size_bytes"] = size
             return {
                 "id": str(uuid4()), "created_at": datetime.now(timezone.utc).isoformat(),
                 "media_type": "video", "sha256": digest.hexdigest(),
-                "verdict": "review_recommended" if flagged else "inconclusive",
+                "verdict": "av_review_recommended" if embedded_flagged or timing_difference else "review_recommended" if flagged else "inconclusive",
                 "ai_score": max(scores) if scores else None,
                 "model": {"id": MODEL_ID, "revision": MODEL_REVISION, "status": status},
                 **analysis,
@@ -212,14 +227,16 @@ async def analyze_video_upload(request: Request):
                     {"title": "Face observations", "value": f"{sum(bool(f['faces']) for f in frames)} samples with faces",
                      "detail": "OpenCV frontal-face detections can miss faces or produce false positives. They do not indicate manipulation."},
                     {"title": "Audio track", "value": "Present" if analysis["metadata"]["has_audio"] else "Not present",
-                     "detail": "Audio contents and audio/video synchronization were not analyzed."},
+                     "detail": "The first audio track is inspected separately below when decodable. Container timing does not establish lip synchronization."},
                 ],
                 "notes": [
                     "The displayed score is the highest uncalibrated image-detector score among sampled frames, not a whole-video probability.",
                     "This image model has not been validated for video deepfakes. No face-manipulation or temporal-consistency verdict is produced.",
                     "Frame images are resized to a maximum edge of 768 pixels before scoring. Display thumbnails are JPEG previews.",
                     f"{len(scores)} of {len(frames)} sampled frames received model scores. Missing scores are never counted as natural.",
-                    "Uploaded video and extracted frames are temporarily written to disk and deleted after the request completes.",
+                    "Uploaded video, extracted frames, and decoded audio are temporarily written to disk and deleted after the request completes.",
+                    "Audio/video timing compares track boundaries only. Intentional edits, codec padding, and soundtracks may explain differences; aligned boundaries do not establish lip synchronization.",
+                    "Frame and embedded-audio detector scores are separate signals and are not fused into a confidence percentage.",
                 ],
             }
     finally:
