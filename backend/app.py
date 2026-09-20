@@ -1,9 +1,11 @@
-"""Local image analysis. Uploaded bytes are never persisted by this application."""
+"""Images stay in memory; video temporary files are removed after each request."""
 import hashlib
 import io
 import logging
 import math
 import os
+from pathlib import Path
+import tempfile
 import threading
 import warnings
 from contextlib import asynccontextmanager
@@ -16,6 +18,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
 MAX_BYTES = 10 * 1024 * 1024
+MAX_VIDEO_BYTES = 100 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 20_000_000
 MODEL_ID = os.getenv("DEEPGUARD_MODEL", "haywoodsloan/ai-image-detector-dev-deploy")
 MODEL_REVISION = os.getenv("DEEPGUARD_REVISION", "3824a1e5fb831d4347cb63dfcb3f2a752d987ef2")
@@ -55,7 +58,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="DeepGuard AI", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="DeepGuard AI", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(","),
@@ -153,5 +156,61 @@ async def analyze_upload(request: Request):
         if not data:
             raise HTTPException(422, "Choose an image to analyze.")
         return await run_in_threadpool(analyze, bytes(data))
+    finally:
+        analysis_lock.release()
+
+
+@app.post("/analyze/video")
+async def analyze_video_upload(request: Request):
+    from video import analyze_video
+
+    if not analysis_lock.acquire(blocking=False):
+        raise HTTPException(429, "Another file is being analyzed. Please try again shortly.")
+    try:
+        # TemporaryDirectory removes uploaded bytes and extracted frames on success or error.
+        with tempfile.TemporaryDirectory(prefix="deepguard-video-") as directory:
+            path = Path(directory) / "upload.bin"
+            digest = hashlib.sha256()
+            size = 0
+            with path.open("wb") as output:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_VIDEO_BYTES:
+                        raise HTTPException(413, "Video must be 100 MB or smaller.")
+                    output.write(chunk)
+                    digest.update(chunk)
+            if not size:
+                raise HTTPException(422, "Choose a video to analyze.")
+            analysis = await run_in_threadpool(analyze_video, path, predict)
+            frames = analysis["frames"]
+            scores = [frame["ai_score"] for frame in frames if frame["ai_score"] is not None]
+            flagged = sum(frame["flagged"] for frame in frames)
+            status = "completed" if len(scores) == len(frames) else "partial" if scores else "unavailable"
+            analysis["metadata"]["size_bytes"] = size
+            return {
+                "id": str(uuid4()), "created_at": datetime.now(timezone.utc).isoformat(),
+                "media_type": "video", "sha256": digest.hexdigest(),
+                "verdict": "review_recommended" if flagged else "inconclusive",
+                "ai_score": max(scores) if scores else None,
+                "model": {"id": MODEL_ID, "revision": MODEL_REVISION, "status": status},
+                **analysis,
+                "summary": {"sampled_frames": len(frames), "scored_frames": len(scores),
+                            "flagged_frames": flagged, "frames_with_faces": sum(bool(f["faces"]) for f in frames)},
+                "observations": [
+                    {"title": "Sample coverage", "value": f"{len(frames)} frames",
+                     "detail": "Up to 12 evenly spaced timestamps were inspected. Events between samples may be missed."},
+                    {"title": "Face observations", "value": f"{sum(bool(f['faces']) for f in frames)} samples with faces",
+                     "detail": "OpenCV frontal-face detections can miss faces or produce false positives. They do not indicate manipulation."},
+                    {"title": "Audio track", "value": "Present" if analysis["metadata"]["has_audio"] else "Not present",
+                     "detail": "Audio contents and audio/video synchronization were not analyzed."},
+                ],
+                "notes": [
+                    "The displayed score is the highest uncalibrated image-detector score among sampled frames, not a whole-video probability.",
+                    "This image model has not been validated for video deepfakes. No face-manipulation or temporal-consistency verdict is produced.",
+                    "Frame images are resized to a maximum edge of 768 pixels before scoring. Display thumbnails are JPEG previews.",
+                    f"{len(scores)} of {len(frames)} sampled frames received model scores. Missing scores are never counted as natural.",
+                    "Uploaded video and extracted frames are temporarily written to disk and deleted after the request completes.",
+                ],
+            }
     finally:
         analysis_lock.release()

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import VideoReport, { type VideoFrame } from "./video-report";
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -22,6 +23,14 @@ import {
 } from "lucide-react";
 
 type Report = {
+  media_type?: "image" | "video";
+  frames?: VideoFrame[];
+  summary?: {
+    sampled_frames: number;
+    scored_frames: number;
+    flagged_frames: number;
+    frames_with_faces: number;
+  };
   id: string;
   created_at: string;
   sha256: string;
@@ -36,6 +45,9 @@ type Report = {
     size_bytes: number;
     exif_fields: number;
     software: string | null;
+    duration_seconds?: number;
+    fps?: number | null;
+    codec?: string;
   };
   notes: string[];
   observations: { title: string; value: string; detail: string }[];
@@ -45,9 +57,11 @@ const verdicts: Record<string, string> = {
   likely_ai_generated: "Likely AI-generated",
   likely_natural: "Likely natural",
   inconclusive: "Inconclusive",
+  review_recommended: "Flagged frames · review recommended",
 };
 
 export default function Home() {
+  const [mode, setMode] = useState<"image" | "video">("image");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [report, setReport] = useState<Report | null>(null);
@@ -94,14 +108,33 @@ export default function Home() {
     if (busy || !candidate) return;
     setError("");
     setReport(null);
-    if (!["image/jpeg", "image/png", "image/webp"].includes(candidate.type)) {
+    const allowed =
+      mode === "image"
+        ? ["image/jpeg", "image/png", "image/webp"]
+        : ["video/mp4", "video/quicktime", "video/webm"];
+    if (
+      !allowed.includes(candidate.type) &&
+      !(
+        mode === "video" &&
+        !candidate.type &&
+        /\.(mp4|mov|webm)$/i.test(candidate.name)
+      )
+    ) {
       setFile(null);
-      setError("Please select a JPEG, PNG, or WebP image.");
+      setError(
+        mode === "image"
+          ? "Please select a JPEG, PNG, or WebP image."
+          : "Please select an MP4, MOV, or WebM video.",
+      );
       return;
     }
-    if (candidate.size > 10 * 1024 * 1024) {
+    if (candidate.size > (mode === "image" ? 10 : 100) * 1024 * 1024) {
       setFile(null);
-      setError("This image exceeds the 10 MB limit.");
+      setError(
+        mode === "image"
+          ? "This image exceeds the 10 MB limit."
+          : "This video exceeds the 100 MB limit.",
+      );
       return;
     }
     setFile(candidate);
@@ -113,12 +146,15 @@ export default function Home() {
     setError("");
     setReport(null);
     try {
-      const response = await fetch(`${API}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
-        signal: AbortSignal.timeout(120000),
-      });
+      const response = await fetch(
+        `${API}/analyze${mode === "video" ? "/video" : ""}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": file.type },
+          body: file,
+          signal: AbortSignal.timeout(mode === "video" ? 240000 : 120000),
+        },
+      );
       const data = await response.json();
       if (!response.ok)
         throw new Error(
@@ -188,8 +224,11 @@ export default function Home() {
             <LockKeyhole size={19} />
           </div>
           <strong>Your media stays yours.</strong>
-          <p>Images are processed in memory and are not saved by DeepGuard.</p>
-          <span className="version">IMAGE ANALYSIS · v0.1</span>
+          <p>
+            Images stay in memory. Video processing uses temporary files that
+            are deleted after analysis.
+          </p>
+          <span className="version">IMAGE + VIDEO · v0.2</span>
         </div>
       </aside>
 
@@ -223,7 +262,7 @@ export default function Home() {
               <span>A clearer picture.</span>
             </h1>
             <p>
-              Go beyond what you see. Inspect your images for signs of
+              Go beyond what you see. Inspect your media for signs of
               <br className="desktop-break" /> AI generation with transparent,
               evidence-led analysis.
             </p>
@@ -247,12 +286,34 @@ export default function Home() {
               </span>
             </div>
             <div className="media-tabs">
-              <span className="selected">
+              <button
+                type="button"
+                className={mode === "image" ? "selected" : ""}
+                aria-pressed={mode === "image"}
+                disabled={busy}
+                onClick={() => {
+                  setMode("image");
+                  setFile(null);
+                  setReport(null);
+                  setError("");
+                }}
+              >
                 <ImageIcon size={17} /> Image
-              </span>
-              <span aria-disabled="true">
-                <Video size={17} /> Video <small>SOON</small>
-              </span>
+              </button>
+              <button
+                type="button"
+                className={mode === "video" ? "selected" : ""}
+                aria-pressed={mode === "video"}
+                disabled={busy}
+                onClick={() => {
+                  setMode("video");
+                  setFile(null);
+                  setReport(null);
+                  setError("");
+                }}
+              >
+                <Video size={17} /> Video
+              </button>
               <span aria-disabled="true">
                 <AudioLines size={17} /> Audio <small>SOON</small>
               </span>
@@ -273,8 +334,14 @@ export default function Home() {
               <input
                 ref={input}
                 type="file"
-                aria-label="Select an image"
-                accept="image/jpeg,image/png,image/webp"
+                aria-label={
+                  mode === "image" ? "Select an image" : "Select a video"
+                }
+                accept={
+                  mode === "image"
+                    ? "image/jpeg,image/png,image/webp"
+                    : "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                }
                 disabled={busy}
                 className="sr-only"
                 onChange={(e) => {
@@ -284,9 +351,17 @@ export default function Home() {
               />
               {file ? (
                 <div className="file-preview">
-                  {preview && (
-                    <img src={preview} alt="Selected image preview" />
-                  )}
+                  {preview &&
+                    (mode === "image" ? (
+                      <img src={preview} alt="Selected image preview" />
+                    ) : (
+                      <video
+                        src={preview}
+                        controls
+                        preload="metadata"
+                        aria-label="Selected video preview"
+                      />
+                    ))}
                   <div>
                     <strong>{file.name}</strong>
                     <p>
@@ -298,12 +373,12 @@ export default function Home() {
                       disabled={busy}
                       onClick={() => input.current?.click()}
                     >
-                      Choose another image
+                      Choose another {mode}
                     </button>
                   </div>
                   <button
                     className="remove"
-                    aria-label="Remove selected image"
+                    aria-label={`Remove selected ${mode}`}
                     disabled={busy}
                     onClick={() => {
                       setFile(null);
@@ -319,7 +394,7 @@ export default function Home() {
                   <div className="upload-icon">
                     <Upload size={26} />
                   </div>
-                  <h3>Drop your image here</h3>
+                  <h3>Drop your {mode} here</h3>
                   <p>
                     or{" "}
                     <button
@@ -331,7 +406,17 @@ export default function Home() {
                     from your device
                   </p>
                   <span className="file-types">
-                    JPG, PNG, WEBP <b>·</b> Up to 10 MB <b>·</b> 20 megapixels
+                    {mode === "image" ? (
+                      <>
+                        JPG, PNG, WEBP <b>·</b> Up to 10 MB <b>·</b> 20
+                        megapixels
+                      </>
+                    ) : (
+                      <>
+                        MP4, MOV, WEBM <b>·</b> Up to 100 MB <b>·</b> 2 minutes
+                        / 4K
+                      </>
+                    )}
                   </span>
                 </>
               )}
@@ -345,7 +430,10 @@ export default function Home() {
             </div>
             <div className="upload-footer">
               <span>
-                <ShieldCheck size={15} /> Your file is never stored by this app
+                <ShieldCheck size={15} />{" "}
+                {mode === "image"
+                  ? "Your image is processed in memory"
+                  : "Temporary video files are deleted after analysis"}
               </span>
               <button
                 className="primary-button"
@@ -354,11 +442,12 @@ export default function Home() {
               >
                 {busy ? (
                   <>
-                    <LoaderCircle size={17} className="spin" /> Analyzing image…
+                    <LoaderCircle size={17} className="spin" /> Analyzing {mode}
+                    …
                   </>
                 ) : (
                   <>
-                    <ScanLine size={17} /> Analyze image{" "}
+                    <ScanLine size={17} /> Analyze {mode}{" "}
                     <ArrowRight size={16} />
                   </>
                 )}
@@ -384,15 +473,21 @@ export default function Home() {
               </div>
               <div className="result-grid">
                 <div className="score-card">
-                  <span>AI-generation model score</span>
+                  <span>
+                    {report.media_type === "video"
+                      ? "Highest sampled-frame score"
+                      : "AI-generation model score"}
+                  </span>
                   <strong>{score === null ? "—" : `${score}%`}</strong>
                   <div className="meter">
                     <span style={{ width: `${score ?? 0}%` }} />
                   </div>
                   <p>
                     {score === null
-                      ? "No detector score available for this image."
-                      : "Uncalibrated model output. This is not a confidence percentage or proof of origin."}
+                      ? "No detector score available for this media."
+                      : report.media_type === "video"
+                        ? "Peak image-detector output across sampled frames. This does not measure whole-video authenticity."
+                        : "Uncalibrated model output. This is not a confidence percentage or proof of origin."}
                   </p>
                 </div>
                 <dl className="metadata">
@@ -413,11 +508,26 @@ export default function Home() {
                     <dd>{(report.metadata.size_bytes / 1024).toFixed(1)} KB</dd>
                   </div>
                   <div>
-                    <dt>Embedded software</dt>
-                    <dd>{report.metadata.software || "Not recorded"}</dd>
+                    <dt>
+                      {report.media_type === "video"
+                        ? "Duration / frame rate"
+                        : "Embedded software"}
+                    </dt>
+                    <dd>
+                      {report.media_type === "video"
+                        ? `${report.metadata.duration_seconds}s / ${report.metadata.fps ?? "Unknown"} fps`
+                        : report.metadata.software || "Not recorded"}
+                    </dd>
                   </div>
                 </dl>
               </div>
+              {report.frames && report.summary && (
+                <VideoReport
+                  frames={report.frames}
+                  summary={report.summary}
+                  src={preview}
+                />
+              )}
               <div className="observations">
                 {report.observations.map((item) => (
                   <div key={item.title}>
