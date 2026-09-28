@@ -127,6 +127,37 @@
 .frame-card.flagged small {
   color: #946015;
 }
+.visual-change {
+  color: #496f5e !important;
+}
+.temporal-evidence {
+  border-top: 1px solid var(--line);
+  margin-top: 24px;
+  padding-top: 22px;
+}
+.temporal-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 0 0 13px;
+}
+.temporal-metrics > div {
+  background: #f1f7f3;
+  border: 1px solid #e0ebe3;
+  border-radius: 6px;
+  padding: 11px;
+}
+.temporal-metrics span {
+  display: block;
+  font-size: 10px;
+  color: #668174;
+  margin-bottom: 7px;
+}
+.temporal-metrics strong {
+  font-size: 16px;
+  font-weight: 600;
+  color: #287564;
+}
 @media (max-width: 850px) {
   .frame-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -153,5 +184,9 @@
   }
   .timeline-heading p {
     font-size: 10px;
+  }
+  .temporal-metrics {
+    grid-template-columns: 1fr;
+    gap: 7px;
   }
 }

@@ -8,6 +8,22 @@ export type VideoFrame = {
   ai_score: number | null;
   flagged: boolean;
   faces: { x: number; y: number; width: number; height: number }[];
+  visual_change_percent: number | null;
+  near_duplicate_previous: boolean;
+  strong_visual_change: boolean;
+};
+export type TemporalEvidence = {
+  status: string;
+  sample_count: number;
+  transition_count: number;
+  near_duplicate_pairs: number;
+  strong_change_candidates: number;
+  median_change_percent: number | null;
+  max_change_percent: number | null;
+  median_timestamp_gap_seconds: number | null;
+  max_timestamp_gap_seconds: number | null;
+  near_duplicate_threshold_percent: number;
+  strong_change_threshold_percent: number;
 };
 
 export function timestamp(seconds: number) {
@@ -18,6 +34,7 @@ export default function VideoReport({
   frames,
   summary,
   src,
+  temporal,
 }: {
   frames: VideoFrame[];
   summary: {
@@ -27,6 +44,7 @@ export default function VideoReport({
     frames_with_faces: number;
   };
   src: string;
+  temporal?: TemporalEvidence;
 }) {
   const player = useRef<HTMLVideoElement>(null);
   const [selected, setSelected] = useState(0);
@@ -128,10 +146,58 @@ export default function VideoReport({
                       ? "Model unavailable"
                       : "Below review threshold"}
                 </small>
+                {sample.visual_change_percent !== null && (
+                  <small className="visual-change">
+                    {sample.near_duplicate_previous
+                      ? "Near-duplicate sample"
+                      : sample.strong_visual_change
+                        ? "Strong visual change"
+                        : `${sample.visual_change_percent}% visual change`}
+                  </small>
+                )}
               </button>
             ),
         )}
       </div>
+      {temporal && (
+        <section
+          className="temporal-evidence"
+          aria-label="Temporal consistency evidence"
+        >
+          <div className="timeline-heading">
+            <div>
+              <h3>Sampled temporal evidence</h3>
+              <p>Pixel changes between consecutive sampled frames.</p>
+            </div>
+            <span>
+              {temporal.near_duplicate_pairs} near-duplicate ·{" "}
+              {temporal.strong_change_candidates} strong change
+            </span>
+          </div>
+          <div className="temporal-metrics">
+            <div>
+              <span>Median change</span>
+              <strong>{temporal.median_change_percent ?? "—"}%</strong>
+            </div>
+            <div>
+              <span>Maximum change</span>
+              <strong>{temporal.max_change_percent ?? "—"}%</strong>
+            </div>
+            <div>
+              <span>Largest sample gap</span>
+              <strong>{temporal.max_timestamp_gap_seconds ?? "—"}s</strong>
+            </div>
+          </div>
+          <p className="timeline-note">
+            Near-duplicate means at or below{" "}
+            {temporal.near_duplicate_threshold_percent}% grayscale pixel change;
+            strong change means at or above{" "}
+            {temporal.strong_change_threshold_percent}%. These are scene-change
+            and repetition cues, not proof of temporal manipulation. Only{" "}
+            {temporal.sample_count} frames were sampled.
+          </p>
+        </section>
+      )}
       {flaggedOnly && !summary.flagged_frames && (
         <p className="playback-note">
           No sampled frames crossed the review threshold. This does not

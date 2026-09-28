@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import VideoReport, { type VideoFrame } from "./video-report";
+import VideoReport, {
+  type VideoFrame,
+  type TemporalEvidence,
+} from "./video-report";
 import AVReport, { type AVTiming, type EmbeddedAudio } from "./av-report";
 import AudioReport, {
   type AudioSegment,
@@ -35,6 +38,7 @@ type Report = {
   audio_summary?: AudioSummary;
   waveform?: number[];
   frames?: VideoFrame[];
+  temporal?: TemporalEvidence;
   summary?: {
     sampled_frames: number;
     scored_frames: number;
@@ -614,6 +618,7 @@ export default function Home() {
                   frames={report.frames}
                   summary={report.summary}
                   src={preview}
+                  temporal={report.temporal}
                 />
               )}
               {report.segments && report.audio_summary && report.waveform && (

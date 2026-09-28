@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+import logging
 import math
 from pathlib import Path
 import subprocess
@@ -11,9 +12,13 @@ from fastapi import HTTPException
 from PIL import Image
 from av_timing import inspect_timing
 
+logger = logging.getLogger("deepguard.video")
+
 MAX_DURATION = 120
 MAX_PIXELS = 3840 * 2160
 SAMPLE_COUNT = 12
+NEAR_DUPLICATE_PERCENT = 0.5
+STRONG_CHANGE_PERCENT = 24
 
 
 def decode_video(path: Path):
@@ -61,6 +66,8 @@ def decode_video(path: Path):
             "software": str(container.metadata.get("encoder", ""))[:200] or None,
         }
         samples = []
+        transitions = []
+        previous_signature = None
         seen = set()
         for index in range(SAMPLE_COUNT):
             target = duration * index / SAMPLE_COUNT
@@ -84,6 +91,12 @@ def decode_video(path: Path):
                 image = frame.to_image().convert("RGB")
                 image.thumbnail((768, 768))
                 pixels = np.asarray(image)
+                signature = cv2.resize(cv2.cvtColor(pixels, cv2.COLOR_RGB2GRAY), (64, 64), interpolation=cv2.INTER_AREA)
+                change_percent = None
+                if previous_signature is not None:
+                    change_percent = float(np.abs(signature.astype(np.float32) - previous_signature).mean() / 255 * 100)
+                    transitions.append(change_percent)
+                previous_signature = signature
                 boxes = face_detector.detectMultiScale(cv2.cvtColor(pixels, cv2.COLOR_RGB2GRAY),
                                                        scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
                 faces = [{"x": round(int(x) / image.width, 4), "y": round(int(y) / image.height, 4),
@@ -96,12 +109,27 @@ def decode_video(path: Path):
                 image.save(thumbnail, format="JPEG", quality=75)
                 image.close()
                 samples.append({"timestamp": round(max(0, float(frame.time) - origin), 3), "file": filename,
+                                "visual_change_percent": round(change_percent, 3) if change_percent is not None else None,
+                                "near_duplicate_previous": change_percent is not None and change_percent <= NEAR_DUPLICATE_PERCENT,
+                                "strong_visual_change": change_percent is not None and change_percent >= STRONG_CHANGE_PERCENT,
                                 "faces": faces, "thumbnail": "data:image/jpeg;base64," +
                                 base64.b64encode(thumbnail.getvalue()).decode("ascii")})
                 break
         if not samples:
             raise ValueError("No readable video frames were found.")
-        return {"metadata": metadata, "frames": samples, "av_timing": timing}
+        timestamps = [sample["timestamp"] for sample in samples]
+        gaps = [right - left for left, right in zip(timestamps, timestamps[1:])]
+        # ponytail: sampled-frame comparison only; decode all frames when a validated temporal model is available.
+        temporal = {"status": "sampled", "sample_count": len(samples), "transition_count": len(transitions),
+                    "near_duplicate_pairs": sum(value <= NEAR_DUPLICATE_PERCENT for value in transitions),
+                    "strong_change_candidates": sum(value >= STRONG_CHANGE_PERCENT for value in transitions),
+                    "median_change_percent": round(float(np.median(transitions)), 3) if transitions else None,
+                    "max_change_percent": round(float(max(transitions)), 3) if transitions else None,
+                    "median_timestamp_gap_seconds": round(float(np.median(gaps)), 3) if gaps else None,
+                    "max_timestamp_gap_seconds": round(float(max(gaps)), 3) if gaps else None,
+                    "near_duplicate_threshold_percent": NEAR_DUPLICATE_PERCENT,
+                    "strong_change_threshold_percent": STRONG_CHANGE_PERCENT}
+        return {"metadata": metadata, "frames": samples, "av_timing": timing, "temporal": temporal}
 
 
 def analyze_video(path: Path, predictor):
@@ -128,6 +156,7 @@ def analyze_video(path: Path, predictor):
             if score is not None and (not math.isfinite(score) or not 0 <= score <= 1):
                 score = None
         except Exception:
+            logger.exception("Video frame inference failed")
             score = None
         frame["ai_score"] = round(score, 6) if score is not None else None
         frame["flagged"] = score is not None and score >= 0.8

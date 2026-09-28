@@ -29,6 +29,9 @@ test("video report has real sampled scores, seeking, filtering, and export", asy
   await expect(
     page.getByRole("region", { name: "Video frame timeline" }),
   ).toBeVisible({ timeout: 120000 });
+  await expect(
+    page.getByRole("region", { name: "Temporal consistency evidence" }),
+  ).toBeVisible();
   const pendingDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export report" }).click();
   const download = await pendingDownload;

@@ -16,7 +16,7 @@ import app
 import video
 
 
-def make_clip(duration=2, fps=12, fmt="mp4", codec="libx264"):
+def make_clip(duration=2, fps=12, fmt="mp4", codec="libx264", scene_change=False):
     buffer = io.BytesIO()
     with av.open(buffer, "w", format=fmt) as container:
         stream = container.add_stream(codec, rate=fps)
@@ -24,8 +24,11 @@ def make_clip(duration=2, fps=12, fmt="mp4", codec="libx264"):
         stream.pix_fmt = "yuv420p"
         for index in range(duration * fps):
             pixels = np.zeros((96, 160, 3), dtype=np.uint8)
-            pixels[:, :, 1] = 90
-            pixels[25:65, (index * 5) % 120: (index * 5) % 120 + 30] = [180, 130, 50]
+            if scene_change and index >= duration * fps // 2:
+                pixels[:, :, :] = 230
+            else:
+                pixels[:, :, 1] = 90
+                pixels[25:65, (index * 5) % 120: (index * 5) % 120 + 30] = [180, 130, 50]
             frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
             for packet in stream.encode(frame):
                 container.mux(packet)
@@ -70,6 +73,20 @@ class VideoTests(unittest.TestCase):
         self.assertEqual(timestamps, sorted(set(timestamps)))
         self.assertGreater(timestamps[-1], 1.5)
         self.assertNotIn("file", result["frames"][0])
+        self.assertEqual(result["temporal"]["sample_count"], 12)
+        self.assertEqual(result["temporal"]["transition_count"], 11)
+        self.assertIsNone(result["frames"][0]["visual_change_percent"])
+
+    def test_sampled_temporal_evidence_is_descriptive(self):
+        with patch.object(app, "predict", return_value=None):
+            result = self.client.post("/analyze/video", content=make_clip(scene_change=True)).json()
+        temporal = result["temporal"]
+        self.assertEqual(temporal["status"], "sampled")
+        self.assertGreaterEqual(temporal["strong_change_candidates"], 1)
+        self.assertGreaterEqual(temporal["near_duplicate_pairs"], 1)
+        self.assertGreater(temporal["max_change_percent"], temporal["median_change_percent"])
+        changed = [frame for frame in result["frames"] if frame["strong_visual_change"]]
+        self.assertTrue(changed)
 
     def test_webm_decode_without_model(self):
         with patch.object(app, "predict", return_value=None):

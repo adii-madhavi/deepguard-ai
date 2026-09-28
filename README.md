@@ -65,6 +65,12 @@ These measurements describe track boundaries, **not lip-sync delay**. Intentiona
 
 The combined report shows separate frame and embedded-speech scores and model details. A timing difference or flagged audio segment can recommend review without altering the visual model score. Audio segment times are relative to decoded audio; playback seeking adds its measured offset in the container. Frame timestamps use the container playback origin. If the audio offset cannot be determined, automatic audio seeking is disabled.
 
+## Sampled temporal evidence
+
+Video reports compare consecutive sampled frames after reducing each to a 64 × 64 grayscale signature. They show visual-change percentages, near-duplicate samples at or below 0.5%, strong visual changes at or above 24%, and the actual gaps between sample timestamps. This uses the same up-to-12 evenly spaced samples already decoded for visual analysis; it does not increase the upload, duration, or processing limits.
+
+These are descriptive repetition and scene-change cues. Camera motion, low light, fades, compression, edits, and frame-rate conversion can produce the same patterns. The metric does not compare all frames, does not identify the cause of a change, and does not establish temporal manipulation or deepfake status.
+
 ## Model and interpretation
 
 Uses [haywoodsloan/ai-image-detector-dev-deploy](https://huggingface.co/haywoodsloan/ai-image-detector-dev-deploy), an Apache-2.0 licensed SwinV2 classifier by Haywood Sloan. Its `artificial` label supplies the AI score. Weights are loaded as safetensors with remote code disabled and are not included in this repository.
