@@ -19,8 +19,10 @@ import audio_analysis as audio
 import audio_routes
 
 
-def make_audio(seconds=7.5, rate=16000, channels=1, silent=False):
-    samples = np.zeros(int(rate * seconds)) if silent else 0.1 * np.sin(np.arange(int(rate * seconds)) * 2 * np.pi * 220 / rate)
+def make_audio(seconds=7.5, rate=16000, channels=1, silent=False, noise=False):
+    count = int(rate * seconds)
+    samples = (np.zeros(count) if silent else 0.1 * np.random.default_rng(0).standard_normal(count).clip(-3, 3) if noise
+               else 0.1 * np.sin(np.arange(count) * 2 * np.pi * 220 / rate))
     pcm = (np.repeat(samples[:, None], channels, axis=1) * 32767).astype("<i2")
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as output:
@@ -92,6 +94,16 @@ class AudioTests(unittest.TestCase):
         predictor.assert_not_called()
         self.assertIsNone(response.json()["ai_score"])
         self.assertEqual(response.json()["audio_summary"]["skipped_segments"], 2)
+
+    def test_noise_is_skipped_by_voice_activity_check(self):
+        with patch.object(audio, "predict") as predictor:
+            result = self.client.post("/analyze/audio", content=make_audio(noise=True)).json()
+        predictor.assert_not_called()
+        self.assertEqual([segment["status"] for segment in result["segments"]], ["no_speech", "no_speech"])
+        self.assertEqual(result["audio_summary"]["speech_segments"], 0)
+        self.assertIsNone(result["ai_score"])
+        voiced = audio.voiced_ratio((0.1 * np.sin(np.arange(16000) * 2 * np.pi * 180 / 16000)).astype(np.float32))
+        self.assertGreater(voiced, 0.9)
 
     def test_short_tail_and_model_failure(self):
         with patch.object(audio, "predict", return_value=None):

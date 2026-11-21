@@ -5,7 +5,11 @@ import VideoReport, {
   type VideoFrame,
   type TemporalEvidence,
 } from "./video-report";
-import AVReport, { type AVTiming, type EmbeddedAudio } from "./av-report";
+import AVReport, {
+  type AVTiming,
+  type EmbeddedAudio,
+  type LipSync,
+} from "./av-report";
 import AudioReport, {
   type AudioSegment,
   type AudioSummary,
@@ -14,6 +18,7 @@ import {
   ArrowDownToLine,
   ArrowRight,
   AudioLines,
+  History,
   Check,
   ChevronRight,
   FileImage,
@@ -25,6 +30,7 @@ import {
   ScanLine,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Upload,
   Video,
   X,
@@ -32,6 +38,7 @@ import {
 
 type Report = {
   av_timing?: AVTiming;
+  lip_sync?: LipSync;
   embedded_audio?: EmbeddedAudio | null;
   media_type?: "image" | "video" | "audio";
   segments?: AudioSegment[];
@@ -68,7 +75,29 @@ type Report = {
   notes: string[];
   observations: { title: string; value: string; detail: string }[];
 };
+type SavedReport = {
+  id: string;
+  created_at: string;
+  media_type: string;
+  filename: string | null;
+  verdict: string;
+  ai_score: number | null;
+};
 const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
+// Random per-browser token: the backend keys report history to its hash. No account involved.
+function clientHeaders(): Record<string, string> {
+  try {
+    let id = localStorage.getItem("deepguard-client");
+    if (!id && crypto.randomUUID) {
+      id = crypto.randomUUID();
+      localStorage.setItem("deepguard-client", id);
+    }
+    return id ? { "X-DeepGuard-Client": id } : {};
+  } catch {
+    return {};
+  }
+}
 const verdicts: Record<string, string> = {
   likely_ai_generated: "Likely AI-generated",
   likely_natural: "Likely natural",
@@ -88,6 +117,9 @@ export default function Home() {
   const [dragging, setDragging] = useState(false);
   const [visionModelStatus, setVisionModelStatus] = useState("connecting");
   const [audioModelStatus, setAudioModelStatus] = useState("connecting");
+  const [history, setHistory] = useState<SavedReport[]>([]);
+  const [historyEnabled, setHistoryEnabled] = useState(false);
+  const [saved, setSaved] = useState(false);
   const modelStatus = mode === "audio" ? audioModelStatus : visionModelStatus;
   const input = useRef<HTMLInputElement>(null);
   const result = useRef<HTMLElement>(null);
@@ -113,6 +145,7 @@ export default function Home() {
         const data = await response.json();
         setVisionModelStatus(data.model_status);
         setAudioModelStatus(data.audio_model_status ?? "unavailable");
+        setHistoryEnabled(Boolean(data.history_enabled));
       } catch {
         if (!controller.signal.aborted) {
           setVisionModelStatus("offline");
@@ -127,6 +160,58 @@ export default function Home() {
       clearInterval(timer);
     };
   }, []);
+
+  async function loadHistory() {
+    try {
+      const response = await fetch(`${API}/reports`, {
+        headers: clientHeaders(),
+      });
+      if (response.ok) setHistory(await response.json());
+    } catch {
+      // History is optional; analysis still works without it.
+    }
+  }
+
+  useEffect(() => {
+    if (historyEnabled) void loadHistory();
+  }, [historyEnabled]);
+
+  async function openSaved(id: string) {
+    if (busy) return;
+    setError("");
+    try {
+      const response = await fetch(`${API}/reports/${id}`, {
+        headers: clientHeaders(),
+      });
+      if (!response.ok) throw new Error();
+      setReport(await response.json());
+      setSaved(true);
+      setTimeout(
+        () =>
+          result.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          }),
+        100,
+      );
+    } catch {
+      setError("That saved report could not be loaded.");
+      void loadHistory();
+    }
+  }
+
+  async function removeSaved(id: string) {
+    try {
+      await fetch(`${API}/reports/${id}`, {
+        method: "DELETE",
+        headers: clientHeaders(),
+      });
+    } catch {
+      setError("That saved report could not be deleted.");
+    }
+    if (saved && report?.id === id) setReport(null);
+    void loadHistory();
+  }
 
   function choose(candidate?: File) {
     if (busy || !candidate) return;
@@ -196,7 +281,11 @@ export default function Home() {
         `${API}/analyze${mode === "image" ? "" : `/${mode}`}`,
         {
           method: "POST",
-          headers: { "Content-Type": file.type },
+          headers: {
+            "Content-Type": file.type,
+            "X-Filename": encodeURIComponent(file.name),
+            ...clientHeaders(),
+          },
           body: file,
           signal: AbortSignal.timeout(mode === "image" ? 120000 : 240000),
         },
@@ -209,6 +298,8 @@ export default function Home() {
             : "Analysis failed. Please try again.",
         );
       setReport(data);
+      setSaved(false);
+      if (historyEnabled) void loadHistory();
       setTimeout(
         () =>
           result.current?.scrollIntoView({
@@ -261,6 +352,11 @@ export default function Home() {
           <a className="nav-item active" href="#analyzer">
             <ScanLine size={18} /> Media analyzer <ChevronRight size={15} />
           </a>
+          {historyEnabled && (
+            <a className="nav-item" href="#history">
+              <History size={18} /> Recent reports
+            </a>
+          )}
           <a className="nav-item" href="#methodology">
             <Layers size={18} /> How it works
           </a>
@@ -271,10 +367,10 @@ export default function Home() {
           </div>
           <strong>Your media stays yours.</strong>
           <p>
-            Images stay in memory. Video and audio use temporary files that are
-            deleted after analysis.
+            Uploaded files are never stored. Only reports are kept, per browser,
+            so you can revisit or delete them.
           </p>
-          <span className="version">IMAGE · VIDEO · AUDIO · v0.4</span>
+          <span className="version">IMAGE · VIDEO · AUDIO · v0.5</span>
         </div>
       </aside>
 
@@ -535,7 +631,9 @@ export default function Home() {
             >
               <div className="result-heading">
                 <div>
-                  <div className="eyebrow">ANALYSIS COMPLETE</div>
+                  <div className="eyebrow">
+                    {saved ? "SAVED REPORT" : "ANALYSIS COMPLETE"}
+                  </div>
                   <h2>{verdicts[report.verdict] || "Inconclusive"}</h2>
                 </div>
                 <button className="secondary-button" onClick={download}>
@@ -617,7 +715,7 @@ export default function Home() {
                 <VideoReport
                   frames={report.frames}
                   summary={report.summary}
-                  src={preview}
+                  src={saved ? "" : preview}
                   temporal={report.temporal}
                 />
               )}
@@ -626,14 +724,15 @@ export default function Home() {
                   segments={report.segments}
                   summary={report.audio_summary}
                   waveform={report.waveform}
-                  src={preview}
+                  src={saved ? "" : preview}
                 />
               )}
               {report.av_timing && (
                 <AVReport
                   timing={report.av_timing}
                   audio={report.embedded_audio}
-                  src={preview}
+                  lipSync={report.lip_sync}
+                  src={saved ? "" : preview}
                 />
               )}
               <div className="observations">
@@ -663,6 +762,54 @@ export default function Home() {
                   ))}
                 </ul>
               </details>
+            </section>
+          )}
+
+          {historyEnabled && (
+            <section
+              className="history"
+              id="history"
+              aria-label="Recent reports"
+            >
+              <div className="section-label">RECENT REPORTS</div>
+              {history.length === 0 ? (
+                <p className="history-empty">
+                  Reports you analyze in this browser appear here. Only the
+                  report is kept, never the uploaded file.
+                </p>
+              ) : (
+                <ul>
+                  {history.map((item) => (
+                    <li key={item.id}>
+                      <button
+                        type="button"
+                        className="history-open"
+                        disabled={busy}
+                        onClick={() => openSaved(item.id)}
+                      >
+                        <strong>
+                          {item.filename || `Untitled ${item.media_type}`}
+                        </strong>
+                        <span>
+                          {item.media_type} ·{" "}
+                          {new Date(item.created_at).toLocaleString()} ·{" "}
+                          {verdicts[item.verdict] || "Inconclusive"}
+                          {item.ai_score != null &&
+                            ` · ${Math.round(item.ai_score * 100)}%`}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="remove"
+                        aria-label={`Delete saved report ${item.filename || item.id}`}
+                        onClick={() => removeSaved(item.id)}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
           )}
 

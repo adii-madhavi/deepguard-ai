@@ -9,18 +9,21 @@ export type AudioSegment = {
   flagged: boolean;
   status: string;
   rms_dbfs: number;
+  speech_ratio?: number;
 };
 export type AudioSummary = {
   total_segments: number;
   scored_segments: number;
   flagged_segments: number;
   skipped_segments: number;
+  speech_segments?: number;
 };
 const time = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(1).padStart(4, "0")}`;
 const statuses: Record<string, string> = {
   near_silent: "Near-silent · not scored",
   too_short: "Too short · not scored",
+  no_speech: "No voice-like activity · not scored",
   unavailable: "Model unavailable",
   failed: "Scoring failed",
 };
@@ -84,7 +87,12 @@ export default function AudioReport({
           />
         ))}
       </svg>
-      {embedded ? (
+      {!src ? (
+        <p className="playback-note">
+          Saved report: the original file is not stored, so playback is
+          unavailable.
+        </p>
+      ) : embedded ? (
         <video
           ref={(node) => {
             player.current = node;
@@ -183,7 +191,11 @@ export default function AudioReport({
                       : "Below review threshold"
                     : statuses[segment.status] || segment.status}
                 </small>
-                <small>{segment.rms_dbfs} dBFS RMS</small>
+                <small>
+                  {segment.rms_dbfs} dBFS RMS
+                  {segment.speech_ratio != null &&
+                    ` · ${Math.round(segment.speech_ratio * 100)}% voice-like`}
+                </small>
               </button>
             ),
         )}
@@ -196,7 +208,9 @@ export default function AudioReport({
       )}
       <p className="timeline-note">
         For speech recordings. Music and noise may produce unreliable scores.
-        Silence and segments shorter than one second are left unscored.
+        Silence, segments shorter than one second, and segments with under 10%
+        voice-like frames (a heuristic check, not a trained detector) are left
+        unscored.
       </p>
     </section>
   );

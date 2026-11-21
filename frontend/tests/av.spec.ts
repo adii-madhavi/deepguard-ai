@@ -32,7 +32,7 @@ test("video report separates timing and embedded speech, with offset-aware seeki
     section.getByText("Track boundaries differ", { exact: true }),
   ).toBeVisible();
   await expect(
-    section.getByText("Lip synchronization: not assessed", { exact: true }),
+    section.getByText("Lip-sync cue: No steady face found", { exact: true }),
   ).toBeVisible();
   const pending = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export report" }).click();
@@ -40,6 +40,7 @@ test("video report separates timing and embedded speech, with offset-aware seeki
   const report = JSON.parse(await readFile((await download.path())!, "utf8"));
   expect(report.av_timing.start_offset_seconds).toBeGreaterThan(0.8);
   expect(report.embedded_audio.audio_summary.total_segments).toBe(2);
+  expect(report.lip_sync.status).toBe("no_face");
   if (process.env.REQUIRE_MODEL === "1") {
     expect(report.model.status).toBe("completed");
     expect(report.embedded_audio.model.status).toBe("completed");

@@ -11,3 +11,5 @@ models/
 test-results/
 playwright-report/
 test-fixtures/
+
+data/

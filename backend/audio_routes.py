@@ -8,12 +8,11 @@ from uuid import uuid4
 from fastapi import HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 import audio_analysis
+from limits import analysis_slot
 
 
-async def upload_audio(request: Request, analysis_lock, max_bytes):
-    if not analysis_lock.acquire(blocking=False):
-        raise HTTPException(429, "Another file is being analyzed. Please try again shortly.")
-    try:
+async def upload_audio(request: Request, max_bytes):
+    async with analysis_slot():
         with tempfile.TemporaryDirectory(prefix="deepguard-audio-") as directory:
             path = Path(directory) / "upload.bin"
             size = 0
@@ -31,5 +30,3 @@ async def upload_audio(request: Request, analysis_lock, max_bytes):
             report["metadata"]["size_bytes"] = size
             return {"id": str(uuid4()), "created_at": datetime.now(timezone.utc).isoformat(),
                     "sha256": digest.hexdigest(), **report}
-    finally:
-        analysis_lock.release()

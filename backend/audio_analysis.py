@@ -16,6 +16,7 @@ MODEL_REVISION = os.getenv("DEEPGUARD_AUDIO_REVISION", "e4d9874b493362149cec96ce
 SAMPLE_RATE = 16000
 MAX_DURATION = 120
 SEGMENT_SECONDS = 6
+MIN_SPEECH_RATIO = 0.1
 model_state = "loading"
 detector = None
 inference_lock = threading.Lock()
@@ -54,6 +55,22 @@ def predict(samples):
     if not math.isfinite(score) or not 0 <= score <= 1:
         raise ValueError("Invalid audio model score")
     return score
+
+
+def voiced_ratio(part):
+    """Fraction of 30 ms frames that are audible, speech-band dominated, and harmonic (not noise-like)."""
+    # ponytail: energy/spectral heuristic, not a trained VAD; music passes. Swap in Silero/WebRTC VAD if that matters.
+    size = int(SAMPLE_RATE * 0.03)
+    count = len(part) // size
+    if not count:
+        return 0.0
+    frames = part[:count * size].reshape(count, size).astype(np.float64)
+    rms = np.sqrt(np.mean(frames ** 2, axis=1))
+    power = np.abs(np.fft.rfft(frames * np.hanning(size), axis=1)) ** 2 + 1e-12
+    freqs = np.fft.rfftfreq(size, 1 / SAMPLE_RATE)
+    band = power[:, (freqs >= 80) & (freqs <= 4000)].sum(axis=1) / power.sum(axis=1)
+    flatness = np.exp(np.mean(np.log(power), axis=1)) / np.mean(power, axis=1)
+    return float(np.mean((rms >= 10 ** (-45 / 20)) & (band >= 0.6) & (flatness <= 0.3)))
 
 
 def decode_audio(path: Path, allow_video=False):
@@ -139,7 +156,9 @@ def analyze_audio(path: Path, allow_video=False):
     for offset in range(0, len(samples), SAMPLE_RATE * SEGMENT_SECONDS):
         part = samples[offset:offset + SAMPLE_RATE * SEGMENT_SECONDS]
         rms = float(np.sqrt(np.mean(part.astype(np.float64) ** 2)))
-        status = "too_short" if len(part) < SAMPLE_RATE else "near_silent" if rms < 0.001 else "unavailable"
+        speech = voiced_ratio(part)
+        status = ("too_short" if len(part) < SAMPLE_RATE else "near_silent" if rms < 0.001
+                  else "no_speech" if speech < MIN_SPEECH_RATIO else "unavailable")
         score = None
         if status == "unavailable":
             try:
@@ -156,12 +175,12 @@ def analyze_audio(path: Path, allow_video=False):
                          "end": round((offset + len(part)) / SAMPLE_RATE, 3),
                          "ai_score": round(score, 6) if score is not None else None,
                          "flagged": score is not None and score >= 0.8, "status": status,
-                         "rms_dbfs": round(20 * math.log10(max(rms, 1e-8)), 1)})
+                         "rms_dbfs": round(20 * math.log10(max(rms, 1e-8)), 1), "speech_ratio": round(speech, 3)})
     waveform = [round(min(1.0, float(np.max(np.abs(part)))), 4)
                 for part in np.array_split(samples, min(160, len(samples)))]
     scores = [segment["ai_score"] for segment in segments if segment["ai_score"] is not None]
     flagged = sum(segment["flagged"] for segment in segments)
-    skipped = sum(segment["status"] in {"near_silent", "too_short"} for segment in segments)
+    skipped = sum(segment["status"] in {"near_silent", "too_short", "no_speech"} for segment in segments)
     status = "completed" if len(scores) == len(segments) else "partial" if scores else "no_scores"
     return {
         "media_type": "audio", "metadata": metadata, "segments": segments, "waveform": waveform,
@@ -169,10 +188,11 @@ def analyze_audio(path: Path, allow_video=False):
         "verdict": "audio_review_recommended" if flagged else "inconclusive",
         "model": {"id": MODEL_ID, "revision": MODEL_REVISION, "status": status, "availability": model_state},
         "audio_summary": {"total_segments": len(segments), "scored_segments": len(scores),
-                          "flagged_segments": flagged, "skipped_segments": skipped},
+                          "flagged_segments": flagged, "skipped_segments": skipped,
+                          "speech_segments": sum(segment["speech_ratio"] >= MIN_SPEECH_RATIO for segment in segments)},
         "observations": [
             {"title": "Segment coverage", "value": f"{len(scores)} / {len(segments)} scored",
-             "detail": "Non-overlapping six-second segments are analyzed. Segments under one second or below -60 dBFS RMS are left unscored."},
+             "detail": "Non-overlapping six-second segments are analyzed. Segments under one second, below -60 dBFS RMS, or with under 10% voice-like frames are left unscored."},
             {"title": "Analysis format", "value": "16 kHz mono",
              "detail": "The first audio track is downmixed and resampled for the speech classifier. Waveform and levels describe that signal."},
             {"title": "Near-full-scale samples", "value": f"{float(np.mean(np.abs(samples) >= 0.999)) * 100:.2f}%",
@@ -181,7 +201,7 @@ def analyze_audio(path: Path, allow_video=False):
         "notes": [
             "The summary is the highest scored segment, not a calibrated confidence estimate for the recording.",
             "This experimental speech detector has limited published training documentation. Music, noise, unfamiliar languages, and new generators may produce unreliable results.",
-            "No speech-activity detector is applied. A non-silent segment may contain music or noise rather than speech.",
+            "A heuristic voice-activity check skips segments with under 10% voice-like 30 ms frames (audible, 80-4000 Hz dominated, harmonic). It is not a trained detector: music and tones can pass, and quiet or whispered speech can be skipped.",
             "Silence and short segments are not scored. Missing or low scores do not establish authenticity.",
             "Speaker identity, audio/video synchronization, and voice-clone attribution are not assessed.",
             "Uploaded audio and decoded samples use temporary files removed when the request completes.",

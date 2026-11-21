@@ -11,6 +11,7 @@ import sys
 from fastapi import HTTPException
 from PIL import Image
 from av_timing import inspect_timing
+import lipsync
 
 logger = logging.getLogger("deepguard.video")
 
@@ -129,7 +130,9 @@ def decode_video(path: Path):
                     "max_timestamp_gap_seconds": round(float(max(gaps)), 3) if gaps else None,
                     "near_duplicate_threshold_percent": NEAR_DUPLICATE_PERCENT,
                     "strong_change_threshold_percent": STRONG_CHANGE_PERCENT}
-        return {"metadata": metadata, "frames": samples, "av_timing": timing, "temporal": temporal}
+        first_face = next((sample["timestamp"] + origin for sample in samples if sample["faces"]), None)
+        lip_sync = lipsync.measure(container, face_detector, first_face)
+        return {"metadata": metadata, "frames": samples, "av_timing": timing, "temporal": temporal, "lip_sync": lip_sync}
 
 
 def analyze_video(path: Path, predictor):

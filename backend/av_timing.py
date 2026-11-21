@@ -7,8 +7,7 @@ REVIEW_THRESHOLD_SECONDS = 0.25
 def compare_tracks(video, audio):
     result = {"status": "unavailable", "video": video, "audio": audio,
               "start_offset_seconds": None, "end_offset_seconds": None,
-              "duration_difference_seconds": None, "review_threshold_seconds": REVIEW_THRESHOLD_SECONDS,
-              "lip_sync": "not_assessed"}
+              "duration_difference_seconds": None, "review_threshold_seconds": REVIEW_THRESHOLD_SECONDS}
     if audio is None:
         result["status"] = "no_audio"
         return result

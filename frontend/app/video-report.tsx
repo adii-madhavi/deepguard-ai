@@ -66,14 +66,21 @@ export default function VideoReport({
           {summary.flagged_frames} flagged
         </span>
       </div>
-      <video
-        ref={player}
-        src={src}
-        controls
-        preload="metadata"
-        aria-label="Analysis video player"
-        onError={() => setPlaybackError(true)}
-      />
+      {src ? (
+        <video
+          ref={player}
+          src={src}
+          controls
+          preload="metadata"
+          aria-label="Analysis video player"
+          onError={() => setPlaybackError(true)}
+        />
+      ) : (
+        <p className="playback-note">
+          Saved report: the original file is not stored, so playback is
+          unavailable.
+        </p>
+      )}
       {playbackError && (
         <p className="playback-note">
           Your browser cannot play this codec. The decoded frame previews and

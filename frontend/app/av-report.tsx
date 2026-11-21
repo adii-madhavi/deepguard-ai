@@ -17,7 +17,28 @@ export type AVTiming = {
   end_offset_seconds: number | null;
   duration_difference_seconds: number | null;
   review_threshold_seconds: number;
-  lip_sync: string;
+};
+export type LipSync = {
+  status: string;
+  window_start_seconds: number | null;
+  window_seconds: number | null;
+  frames_analyzed: number;
+  face_coverage: number | null;
+  best_offset_seconds: number | null;
+  peak_correlation: number | null;
+  zero_lag_correlation: number | null;
+  max_lag_seconds: number;
+  weak_correlation_threshold: number;
+  offset_review_seconds: number;
+};
+const lipLabels: Record<string, string> = {
+  no_audio: "No audio track",
+  no_face: "No steady face found",
+  insufficient_frames: "Too few frames",
+  low_activity: "Too little mouth or audio activity",
+  weak_correspondence: "Weak mouth/audio correspondence",
+  offset_candidate: "Possible audio offset",
+  consistent_cue: "Mouth motion follows audio",
 };
 export type EmbeddedAudio =
   | { error: string }
@@ -44,10 +65,12 @@ const offset = (value: number | null) =>
 export default function AVReport({
   timing,
   audio,
+  lipSync,
   src,
 }: {
   timing: AVTiming;
   audio?: EmbeddedAudio | null;
+  lipSync?: LipSync;
   src: string;
 }) {
   return (
@@ -57,7 +80,12 @@ export default function AVReport({
           <h3>Audio & video consistency</h3>
           <p>{labels[timing.status] || "Timing unavailable"}</p>
         </div>
-        <span>Lip synchronization: not assessed</span>
+        <span>
+          Lip-sync cue:{" "}
+          {lipSync
+            ? lipLabels[lipSync.status] || lipSync.status
+            : "Not assessed"}
+        </span>
       </div>
       {timing.audio && (
         <dl className="metadata">
@@ -81,6 +109,40 @@ export default function AVReport({
         for review. These are track boundaries, not measured lip-sync delay.
         Edits, soundtracks, and codec padding can explain differences.
       </p>
+      {lipSync?.peak_correlation != null && (
+        <dl className="metadata">
+          <div>
+            <dt>Best mouth/audio offset</dt>
+            <dd>{offset(lipSync.best_offset_seconds)}</dd>
+          </div>
+          <div>
+            <dt>Peak / zero-lag correlation</dt>
+            <dd>
+              {lipSync.peak_correlation.toFixed(2)} /{" "}
+              {lipSync.zero_lag_correlation?.toFixed(2) ?? "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>Window / face coverage</dt>
+            <dd>
+              {lipSync.window_start_seconds}s +{lipSync.window_seconds}s /{" "}
+              {Math.round((lipSync.face_coverage ?? 0) * 100)}%
+            </dd>
+          </div>
+        </dl>
+      )}
+      {lipSync && lipSync.status !== "no_audio" && (
+        <p className="timeline-note">
+          Lip-sync cue: mouth-region motion of the largest OpenCV face is
+          correlated with audio loudness over up to 8 seconds, at offsets up to
+          ±{Math.round(lipSync.max_lag_seconds * 1000)} ms. Offsets over{" "}
+          {Math.round(lipSync.offset_review_seconds * 1000)} ms or correlation
+          below {lipSync.weak_correlation_threshold} are described, not scored.
+          This uncalibrated heuristic is not a trained sync model; off-screen
+          speakers, music, and head motion affect it, and it does not change the
+          verdict.
+        </p>
+      )}
       {timing.audio && (
         <p className="timeline-note">
           Timing sources: video {timing.video.source.replaceAll("_", " ")},

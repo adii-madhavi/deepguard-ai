@@ -12,12 +12,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageOps, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 import audio_analysis
+import history
 from audio_routes import upload_audio
+from limits import analysis_lock, analysis_slot, rate_limit, require_key
 
 MAX_BYTES = 10 * 1024 * 1024
 MAX_VIDEO_BYTES = 100 * 1024 * 1024
@@ -30,7 +32,6 @@ logger = logging.getLogger("deepguard")
 detector = None
 model_state = "loading"
 inference_lock = threading.Lock()
-analysis_lock = threading.Lock()
 
 
 def load_detector():
@@ -57,29 +58,56 @@ def load_detector():
 
 @asynccontextmanager
 async def lifespan(app):
-    threading.Thread(target=load_detector, daemon=True).start()
-    threading.Thread(target=audio_analysis.load_detector, daemon=True).start()
+    # Sequential on purpose: concurrent from_pretrained calls race on transformers' global
+    # empty-weights patching and can leave parameters on the "meta" device.
+    def load_all():
+        load_detector()
+        audio_analysis.load_detector()
+    threading.Thread(target=load_all, daemon=True).start()
     yield
 
 
-app = FastAPI(title="DeepGuard AI", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="DeepGuard AI", version="0.5.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(","),
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-DeepGuard-Client", "X-Filename"],
 )
 
 
 @app.get("/health")
 def health():
     return {"status": "ok", "model_status": model_state, "model_id": MODEL_ID,
-            "audio_model_status": audio_analysis.model_state, "audio_model_id": audio_analysis.MODEL_ID}
+            "audio_model_status": audio_analysis.model_state, "audio_model_id": audio_analysis.MODEL_ID,
+            "history_enabled": history.ENABLED}
 
 
-@app.post("/analyze/audio")
+@app.get("/reports", dependencies=[Depends(require_key)])
+def list_reports(request: Request):
+    return history.list_reports(request)
+
+
+@app.get("/reports/{report_id}", dependencies=[Depends(require_key)])
+def get_report(report_id: str, request: Request):
+    report = history.get_report(request, report_id)
+    if report is None:
+        raise HTTPException(404, "Report not found.")
+    return report
+
+
+@app.delete("/reports/{report_id}", status_code=204, dependencies=[Depends(require_key)])
+def delete_report(report_id: str, request: Request):
+    if not history.delete_report(request, report_id):
+        raise HTTPException(404, "Report not found.")
+    return Response(status_code=204)
+
+
+@app.post("/analyze/audio", dependencies=[Depends(rate_limit)])
 async def analyze_audio_upload(request: Request):
-    return await upload_audio(request, analysis_lock, MAX_AUDIO_BYTES)
+    report = await upload_audio(request, MAX_AUDIO_BYTES)
+    await run_in_threadpool(history.save, request, report)
+    return report
 
 
 def predict(image):
@@ -152,12 +180,9 @@ def analyze(data: bytes):
     }
 
 
-@app.post("/analyze")
+@app.post("/analyze", dependencies=[Depends(rate_limit)])
 async def analyze_upload(request: Request):
-    # ponytail: one in-flight analysis per process; add a bounded worker queue when traffic requires it.
-    if not analysis_lock.acquire(blocking=False):
-        raise HTTPException(429, "Another file is being analyzed. Please try again shortly.")
-    try:
+    async with analysis_slot():
         data = bytearray()
         async for chunk in request.stream():
             if len(data) + len(chunk) > MAX_BYTES:
@@ -165,18 +190,22 @@ async def analyze_upload(request: Request):
             data.extend(chunk)
         if not data:
             raise HTTPException(422, "Choose an image to analyze.")
-        return await run_in_threadpool(analyze, bytes(data))
-    finally:
-        analysis_lock.release()
+        report = await run_in_threadpool(analyze, bytes(data))
+        await run_in_threadpool(history.save, request, report)
+        return report
 
 
-@app.post("/analyze/video")
+@app.post("/analyze/video", dependencies=[Depends(rate_limit)])
 async def analyze_video_upload(request: Request):
+    report = await analyze_video_request(request)
+    await run_in_threadpool(history.save, request, report)
+    return report
+
+
+async def analyze_video_request(request: Request):
     from video import analyze_video
 
-    if not analysis_lock.acquire(blocking=False):
-        raise HTTPException(429, "Another file is being analyzed. Please try again shortly.")
-    try:
+    async with analysis_slot():
         # TemporaryDirectory removes uploaded bytes and extracted frames on success or error.
         with tempfile.TemporaryDirectory(prefix="deepguard-video-") as directory:
             path = Path(directory) / "upload.bin"
@@ -239,5 +268,3 @@ async def analyze_video_upload(request: Request):
                     "Frame and embedded-audio detector scores are separate signals and are not fused into a confidence percentage.",
                 ],
             }
-    finally:
-        analysis_lock.release()
