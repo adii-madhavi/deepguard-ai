@@ -70,7 +70,7 @@ async def lifespan(app):
 app = FastAPI(title="DeepGuard AI", version="0.5.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(","),
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,https://adii-madhavi.github.io").split(","),
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-DeepGuard-Client", "X-Filename"],
 )

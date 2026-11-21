@@ -2,6 +2,12 @@
 
 Image, sampled-video, and segmented-audio analysis with a Next.js + Tailwind dashboard and a FastAPI inference service. Upload media, inspect metadata and model evidence, export a JSON report, and revisit recent reports.
 
+## Live demo
+
+The dashboard is published at **https://adii-madhavi.github.io/deepguard-ai/** by `.github/workflows/pages.yml` on every push to `main` that touches `frontend/`. GitHub Pages only serves static files, so the page sends media to **your own backend at `http://127.0.0.1:8000`**. Start the backend as shown below and the hosted page works; files never leave your machine. Without it, the page reports the service as offline. The backend's default `CORS_ORIGINS` already includes `https://adii-madhavi.github.io`. Chrome and Firefox allow an HTTPS page to call `127.0.0.1` (Chrome may ask for local network access); Safari blocks it, so use the local frontend there.
+
+Report history in this mode is stored in your local backend's `data/reports.db`.
+
 ## Run locally (PowerShell)
 
 Requires Node.js 20.9+ and Python 3.11+.
@@ -110,7 +116,7 @@ The API stays open-by-default for local use. For a public deployment:
 - `DEEPGUARD_API_KEYS`: comma-separated keys accepted via `X-API-Key` or `Authorization: Bearer`. A key placed in the public frontend is not secret, so use keys for private/API deployments, not a public browser demo.
 - `CORS_ORIGINS`: set to the frontend's real domain.
 
-`backend/Dockerfile` builds a CPU image listening on port 7860 (Hugging Face Spaces Docker SDK compatible; set `PORT` elsewhere). It needs roughly 4 GB RAM for both models. It trusts proxy `X-Forwarded-For` headers for rate limiting, so run it only behind the host's proxy. Deploy the frontend on Vercel with `NEXT_PUBLIC_API_URL` set to the API URL.
+No hosted backend is deployed: Hugging Face Docker Spaces require a PRO subscription and the two models need about 4 GB RAM, more than typical free tiers. `backend/Dockerfile` builds a CPU image listening on port 7860 (Hugging Face Spaces Docker SDK compatible; set `PORT` elsewhere). It needs roughly 4 GB RAM for both models. It trusts proxy `X-Forwarded-For` headers for rate limiting, so run it only behind the host's proxy. Deploy the frontend on Vercel with `NEXT_PUBLIC_API_URL` set to the API URL.
 
 ## Next stages
 

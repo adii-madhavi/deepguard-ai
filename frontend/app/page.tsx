@@ -339,7 +339,7 @@ export default function Home() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <a className="brand" href="/" aria-label="DeepGuard AI home">
+        <a className="brand" href="#" aria-label="DeepGuard AI home">
           <span className="brand-icon">
             <ShieldCheck size={23} />
           </span>
